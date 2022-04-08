@@ -16,8 +16,8 @@ pub struct BlockWithClientId<'a, T: Clone> {
 }
 
 impl<T: Clone> Store<T> {
-    pub(crate) fn integrate(&mut self, client_id: ClientId, mut blocks: Vec<Block<T>>) {
-        for block in blocks.iter_mut() {
+    pub(crate) fn integrate(&mut self, client_id: ClientId, blocks: Vec<Block<T>>) {
+        for mut block in blocks.into_iter() {
             let insert_before =
                 self.find_insertion_point(client_id, block.origin_left, block.origin_right);
 
@@ -60,9 +60,9 @@ impl<T: Clone> Store<T> {
                 self.start = new_block_id;
                 self.end = new_block_id;
             }
-        }
 
-        self.data.insert(client_id, blocks);
+            self.data.entry(client_id).or_insert(vec![]).push(block)
+        }
     }
 
     fn find_insertion_point(
@@ -372,6 +372,37 @@ mod tests {
         assert_eq!(
             store.iter_values().collect::<Vec<&String>>(),
             vec!["Test", "Test 4", "Test 3", "Test 2"]
+        )
+    }
+
+    #[test]
+    fn integrate_multiple_changes() {
+        let mut store: Store<String> = Store::new(2);
+        store.append("Test".to_owned());
+        store.append("Test 2".to_owned());
+        store.insert(1, "Test 3".to_owned());
+
+        store.integrate(
+            1,
+            vec![
+                Block::with_value_and_right(
+                    0,
+                    Some(BlockId::new(2, 0)),
+                    Some(BlockId::new(2, 1)),
+                    "Test 4".to_owned(),
+                ),
+                Block::with_value_and_right(
+                    1,
+                    Some(BlockId::new(1, 0)),
+                    Some(BlockId::new(2, 1)),
+                    "Test 5".to_owned(),
+                ),
+            ],
+        );
+
+        assert_eq!(
+            store.iter_values().collect::<Vec<&String>>(),
+            vec!["Test", "Test 4", "Test 5", "Test 3", "Test 2"]
         )
     }
 }
