@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 rand = "0.7"
+bincode = "2.0.0-rc.1"

@@ -1,3 +1,5 @@
+mod block;
+mod delete_set;
 mod document;
 mod store;
 mod update;

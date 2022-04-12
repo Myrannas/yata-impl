@@ -1,21 +1,22 @@
-use crate::document::{Block, BlockId, ClientId, Clock};
+use crate::block::{Block, Item};
+use crate::document::{BlockId, ClientId, Clock};
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 
 #[derive(Debug)]
-pub struct Store<T: Clone> {
+pub struct Store<T: Item> {
     start: Option<BlockId>,
     end: Option<BlockId>,
     client_id: u64,
     pub(crate) data: HashMap<ClientId, Vec<Block<T>>>,
 }
 
-pub struct BlockWithClientId<'a, T: Clone> {
+pub struct BlockWithClientId<'a, T: Item> {
     block: &'a Block<T>,
     block_id: BlockId,
 }
 
-impl<T: Clone> Store<T> {
+impl<T: Item> Store<T> {
     pub(crate) fn integrate(&mut self, client_id: ClientId, blocks: Vec<Block<T>>) {
         for mut block in blocks.into_iter() {
             let insert_before =
@@ -93,7 +94,7 @@ impl<T: Clone> Store<T> {
 // Right satisfies:
 //    Left = My left
 
-impl<T: Clone> Index<BlockId> for Store<T> {
+impl<T: Item> Index<BlockId> for Store<T> {
     type Output = Block<T>;
 
     fn index(&self, BlockId { client_id, clock }: BlockId) -> &Self::Output {
@@ -101,13 +102,13 @@ impl<T: Clone> Index<BlockId> for Store<T> {
     }
 }
 
-impl<T: Clone> IndexMut<BlockId> for Store<T> {
+impl<T: Item> IndexMut<BlockId> for Store<T> {
     fn index_mut(&mut self, BlockId { client_id, clock }: BlockId) -> &mut Self::Output {
         &mut self.data.get_mut(&client_id).unwrap()[clock as usize]
     }
 }
 
-impl<T: Clone> Store<T> {
+impl<T: Item> Store<T> {
     pub fn new(client_id: u64) -> Store<T> {
         Store {
             data: HashMap::new(),
@@ -122,20 +123,31 @@ impl<T: Clone> Store<T> {
     }
 
     pub fn insert(&mut self, index: usize, value: T) {
-        let (previous, next) = if let Some(previous) = self
-            .iter_blocks()
-            .filter(|b| !b.block.deleted)
-            .take(index)
-            .next()
-        {
-            // at the start
-            (Some(previous.block_id), previous.block.right)
-        } else {
-            // at the end
-            (None, None)
-        };
+        let (previous, next) = self
+            .iter_live_blocks()
+            .nth(index)
+            .map_or((None, None), |BlockWithClientId { block_id, block }| {
+                (Some(block_id), block.right)
+            });
 
         self.add_block(previous, next, value);
+    }
+
+    pub fn delete_range(&mut self, index: usize, count: usize) {
+        let block_ids: Vec<BlockId> = self
+            .iter_live_blocks()
+            .skip(index)
+            .take(count)
+            .map(|b| b.block_id)
+            .collect();
+
+        for block_id in block_ids {
+            self[block_id].delete();
+        }
+    }
+
+    pub fn delete(&mut self, index: usize) {
+        self.delete_range(index, 1);
     }
 
     fn add_block(&mut self, previous: Option<BlockId>, next: Option<BlockId>, value: T) {
@@ -196,6 +208,15 @@ impl<T: Clone> Store<T> {
         }
     }
 
+    fn iter_live_blocks(&self) -> impl Iterator<Item = BlockWithClientId<T>> {
+        StoreIterator {
+            store: self,
+            current: None,
+            is_done: false,
+        }
+        .filter(|b| !b.block.deleted)
+    }
+
     pub fn iter_blocks_with_offset(
         &self,
         start: Option<BlockId>,
@@ -213,13 +234,13 @@ impl<T: Clone> Store<T> {
     }
 }
 
-struct StoreIterator<'a, T: Clone> {
+struct StoreIterator<'a, T: Item> {
     store: &'a Store<T>,
     current: Option<BlockId>,
     is_done: bool,
 }
 
-impl<'a, T: Clone> Iterator for StoreIterator<'a, T> {
+impl<'a, T: Item> Iterator for StoreIterator<'a, T> {
     type Item = BlockWithClientId<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -250,7 +271,8 @@ impl<'a, T: Clone> Iterator for StoreIterator<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::document::{Block, BlockId};
+    use crate::block::Block;
+    use crate::document::BlockId;
     use crate::store::Store;
 
     #[test]
@@ -292,6 +314,22 @@ mod tests {
             store.find_insertion_point(2, Some(BlockId::new(1, 0)), Some(BlockId::new(1, 1)));
 
         assert_eq!(insertion_point, Some(BlockId::new(1, 1)))
+    }
+
+    #[test]
+    fn test_deletion() {
+        let mut store: Store<String> = Store::new(1);
+        store.append("Test".to_owned());
+        store.append("Test 2".to_owned());
+        store.append("Test 3".to_owned());
+        store.append("Test 4".to_owned());
+
+        store.delete_range(1, 2);
+
+        assert_eq!(
+            store.iter_values().collect::<Vec<&String>>(),
+            vec!["Test", "Test 4"]
+        );
     }
 
     #[test]
